@@ -34,6 +34,7 @@
 #include "pico/time.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
+#include "custom_touch_gesture.h"
 #endif
 
 // Pico SDK support for waiting on conditions.
@@ -304,6 +305,9 @@ uint8_t interrupt_in_data[63] = {
 critical_section_t report_cs;
 volatile bool report_dirty = false;
 BridgeControllerState interrupt_in_state{};
+#ifdef ENABLE_COMPANION
+static CustomTouchGestureState custom_touch_gesture{};
+#endif
 static volatile bool host_input_waiting_for_mount = false;
 static volatile uint32_t host_input_fallback_until_us = 0;
 
@@ -415,6 +419,10 @@ static bool dualsense_feature_report_may_use_bt_passthrough(
 }
 
 void host_input_prepare_persona_switch() {
+#ifdef ENABLE_COMPANION
+    custom_touch_gesture_reset(custom_touch_gesture);
+    companion_reset_custom_keyboard_shortcuts();
+#endif
     const HostPersonaMode current_persona = host_persona_active();
     const BridgeControllerState neutral_state = neutral_controller_state();
     const uint32_t now = time_us_32();
@@ -436,6 +444,10 @@ void host_input_note_usb_mounted() {
 }
 
 void reset_controller_input_report_cache() {
+#ifdef ENABLE_COMPANION
+    custom_touch_gesture_reset(custom_touch_gesture);
+    companion_reset_custom_keyboard_shortcuts();
+#endif
     BridgeControllerState default_state{};
     (void)dualsense_decode_usb_input_report(
         kNeutralDualSenseUsbInputReport,
@@ -500,7 +512,14 @@ void interrupt_loop() {
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // DS5_LOG("[Main] BT data callback: channel=%u len=%u\n", channel, len);
-    if (data == nullptr || channel != INTERRUPT || len <= 2 || data[1] != 0x31) {
+    if (data == nullptr || channel != INTERRUPT) {
+        return;
+    }
+    if (len <= 2 || data[1] != 0x31) {
+#ifdef ENABLE_COMPANION
+        custom_touch_gesture_reset(custom_touch_gesture);
+        companion_reset_custom_keyboard_shortcuts();
+#endif
         return;
     }
 
@@ -510,6 +529,10 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     }
 
     if (len < 3 + sizeof(interrupt_in_data)) {
+#ifdef ENABLE_COMPANION
+        custom_touch_gesture_reset(custom_touch_gesture);
+        companion_reset_custom_keyboard_shortcuts();
+#endif
         return;
     }
 
@@ -524,6 +547,23 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     if (!dualsense_decode_usb_input_report(controller_report, sizeof(controller_report), controller_state)) {
         return;
     }
+
+#ifdef ENABLE_COMPANION
+    const CustomTouchResult gesture = custom_touch_gesture_process(
+        custom_touch_gesture, controller_state, time_us_32()
+    );
+    if (gesture.suppress_click) {
+        // The only changed controller bit is the physical click that toggled recording.
+        controller_report[9] &= static_cast<uint8_t>(~0x02u);
+        controller_state.touchpad = false;
+        controller_state.dualsense_report[9] = controller_report[9];
+    }
+    if (gesture.action != CustomTouchAction::None) {
+        companion_queue_custom_keyboard_shortcut(
+            gesture.action == CustomTouchAction::Screenshot
+        );
+    }
+#endif
 
     // We add the critical section here to avoid any race conditions when writing to the interrupt_in_data buffer,
     // which is shared between the main loop and this callback.

@@ -82,6 +82,12 @@ constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardChordStarterFlag = 0x10;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
 constexpr uint32_t kKeyboardPressDurationUs = 40000;
+constexpr uint8_t kGameBarModifiers = 0x0c; // Left Alt + Left GUI.
+constexpr uint8_t kGameBarScreenshotUsage = 0x46; // Print Screen.
+constexpr uint8_t kNvidiaRecordModifiers = 0x04; // Left Alt.
+constexpr uint8_t kNvidiaRecordUsage = 0x3b; // F2.
+constexpr uint8_t kCustomKeyboardQueueDepth = 4;
+struct CustomKeyboardShortcut { uint8_t modifiers; uint8_t usage; };
 constexpr uint32_t kMuteKeyboardChordWindowUs = 250000;
 constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
@@ -356,6 +362,12 @@ uint8_t shortcut_event_head = 0;
 uint8_t shortcut_event_tail = 0;
 uint8_t shortcut_event_count = 0;
 bool mute_keyboard_pending = false;
+CustomKeyboardShortcut custom_keyboard_queue[kCustomKeyboardQueueDepth]{};
+uint8_t custom_keyboard_head = 0;
+uint8_t custom_keyboard_tail = 0;
+uint8_t custom_keyboard_count = 0;
+bool custom_keyboard_pressed = false;
+uint32_t custom_keyboard_release_at_us = 0;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
 bool mute_keyboard_chord_pending = false;
@@ -1628,6 +1640,18 @@ void mute_keyboard_loop() {
         return;
     }
 
+    // A keyboard report replaces the entire HID key state. Release one action
+    // before either the mute key or another shortcut can send a new report.
+    if (custom_keyboard_pressed) {
+        if (static_cast<int32_t>(now - custom_keyboard_release_at_us) >= 0) {
+            uint8_t released[8]{};
+            if (tud_hid_n_report(keyboard_hid_instance, 0, released, sizeof(released))) {
+                custom_keyboard_pressed = false;
+            }
+        }
+        return;
+    }
+
     if (mute_keyboard_pending) {
         uint8_t keyboard_report[8]{};
         keyboard_report[0] = mute_keyboard_modifiers & kMuteKeyboardModifierMask;
@@ -1649,6 +1673,20 @@ void mute_keyboard_loop() {
         if (tud_hid_n_report(keyboard_hid_instance, 0, keyboard_report, sizeof(keyboard_report))) {
             mute_keyboard_pressed = false;
         }
+        return;
+    }
+    if (mute_keyboard_pressed || custom_keyboard_count == 0) {
+        return;
+    }
+
+    uint8_t keyboard_report[8]{};
+    keyboard_report[0] = custom_keyboard_queue[custom_keyboard_head].modifiers;
+    keyboard_report[2] = custom_keyboard_queue[custom_keyboard_head].usage;
+    if (tud_hid_n_report(keyboard_hid_instance, 0, keyboard_report, sizeof(keyboard_report))) {
+        custom_keyboard_head = static_cast<uint8_t>((custom_keyboard_head + 1) % kCustomKeyboardQueueDepth);
+        custom_keyboard_count--;
+        custom_keyboard_pressed = true;
+        custom_keyboard_release_at_us = now + kKeyboardPressDurationUs;
     }
 }
 
@@ -3104,6 +3142,23 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
 }
 
 } // namespace
+
+void __not_in_flash_func(companion_queue_custom_keyboard_shortcut)(bool screenshot) {
+    if (custom_keyboard_count == kCustomKeyboardQueueDepth) return;
+    custom_keyboard_queue[custom_keyboard_tail] = screenshot
+        ? CustomKeyboardShortcut{kGameBarModifiers, kGameBarScreenshotUsage}
+        : CustomKeyboardShortcut{kNvidiaRecordModifiers, kNvidiaRecordUsage};
+    custom_keyboard_tail = static_cast<uint8_t>((custom_keyboard_tail + 1) % kCustomKeyboardQueueDepth);
+    custom_keyboard_count++;
+}
+
+void companion_reset_custom_keyboard_shortcuts() {
+    custom_keyboard_head = custom_keyboard_tail = custom_keyboard_count = 0;
+    if (custom_keyboard_pressed) {
+        // Keep the release pending across USB unmount/reconnect.
+        custom_keyboard_release_at_us = time_us_32();
+    }
+}
 
 void companion_init() {
     critical_section_init(&companion_report_cs);

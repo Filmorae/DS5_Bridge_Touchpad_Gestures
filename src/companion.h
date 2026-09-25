@@ -41,6 +41,8 @@ enum CompanionFeedbackTraceStage : uint8_t {
 void companion_init();
 void companion_loop();
 void companion_process_controller_report(uint8_t *report, uint16_t len);
+void companion_queue_custom_keyboard_shortcut(bool screenshot);
+void companion_reset_custom_keyboard_shortcuts();
 void companion_update_controller_report(uint8_t const *report, uint16_t len);
 void companion_note_host_output_report(uint8_t const *report, uint16_t len);
 #if DS5_TRIGGER_TRACE_ENABLED
