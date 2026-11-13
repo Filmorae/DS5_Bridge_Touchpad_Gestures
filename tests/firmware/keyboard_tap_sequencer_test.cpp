@@ -41,8 +41,9 @@ BootKeyboardOutputReport report(uint8_t modifiers, std::initializer_list<uint8_t
 // Accepts every report the sequencer asks for and hands it to the host in the
 // same pass, so the next pass sees it delivered. A test can clear `delivered`
 // to hold one pass back.
+template <typename Sequencer>
 struct Transport {
-    KeyboardTapSequencer &taps;
+    Sequencer &taps;
     uint32_t now = 1'000'000;
     bool delivered = true;
     std::vector<BootKeyboardOutputReport> host{};
@@ -271,6 +272,64 @@ void test_reset_forgets_everything() {
         "Reset must forget the current and waiting taps");
 }
 
+void test_touch_shortcuts_wait_for_a_held_mute_key() {
+    ds5::BridgeKeyboardShortcuts taps;
+    Transport transport{taps};
+    taps.enqueue_mute(report(0x01, {0x68}), true);
+    transport.step();
+    transport.step();
+    transport.now += kKeyboardTapModifierLeadUs;
+    transport.step();
+    transport.step();
+    taps.enqueue_touch(report(0x0c, {0x46}));
+    transport.now += kKeyboardTapHoldUs;
+    require(!transport.step() && transport.host.back() == report(0x01, {0x68}),
+        "A gesture must not overwrite the held mute report");
+    taps.release_mute();
+    transport.run_until_idle();
+    require(transport.host == std::vector<BootKeyboardOutputReport>{
+        report(0x01), report(0x01, {0x68}), report(0x01), {},
+        report(0x0c), report(0x0c, {0x46}), report(0x0c), {},
+    }, "Mute must release before Win+Alt+Print Screen starts");
+}
+
+void test_touch_cancellation_preserves_mute_queue() {
+    ds5::BridgeKeyboardShortcuts taps;
+    Transport transport{taps};
+    taps.enqueue_touch(report(0x04, {0x3b}));
+    transport.step();
+    transport.step();
+    transport.now += kKeyboardTapModifierLeadUs;
+    transport.step();
+    taps.enqueue_touch(report(0x0c, {0x46}));
+    taps.enqueue_mute(report(0, {0x68}), false);
+    transport.delivered = false;
+    BootKeyboardOutputReport next{};
+    taps.cancel_touch();
+    require(taps.next_report(transport.now, false, next) && next == BootKeyboardOutputReport{},
+        "The only offered report after touch cancellation must release the keys");
+    transport.step();
+    transport.run_until_idle();
+    require(transport.host == std::vector<BootKeyboardOutputReport>{
+        report(0x04), report(0x04, {0x3b}), {}, report(0, {0x68}), {},
+    }, "Touch cancellation must release Alt+F2, drop stale gestures and preserve mute");
+}
+
+void test_mute_has_priority_after_the_current_touch_tap() {
+    ds5::BridgeKeyboardShortcuts taps;
+    Transport transport{taps};
+    taps.enqueue_touch(report(0x04, {0x3b}));
+    transport.step();
+    taps.enqueue_touch(report(0x0c, {0x46}));
+    taps.enqueue_mute(report(0, {0x68}), false);
+    transport.run_until_idle();
+    require(transport.host == std::vector<BootKeyboardOutputReport>{
+        report(0x04), report(0x04, {0x3b}), report(0x04), {},
+        report(0, {0x68}), {},
+        report(0x0c), report(0x0c, {0x46}), report(0x0c), {},
+    }, "Mute must run between gestures without overwriting a report");
+}
+
 } // namespace
 
 int main() {
@@ -285,6 +344,9 @@ int main() {
     test_held_tap_waits_for_release();
     test_held_tap_released_early_keeps_the_minimum_hold();
     test_reset_forgets_everything();
+    test_touch_shortcuts_wait_for_a_held_mute_key();
+    test_touch_cancellation_preserves_mute_queue();
+    test_mute_has_priority_after_the_current_touch_tap();
     std::cout << "Keyboard tap sequencer tests passed\n";
     return 0;
 }

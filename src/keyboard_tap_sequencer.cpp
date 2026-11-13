@@ -53,7 +53,8 @@ void KeyboardTapSequencer::reset() {
 bool KeyboardTapSequencer::next_report(
     uint32_t now_us,
     bool delivered,
-    BootKeyboardOutputReport &report
+    BootKeyboardOutputReport &report,
+    bool start_next_tap
 ) {
     if (stage_ != Stage::Idle && !stage_delivered_ && delivered) {
         stage_delivered_ = true;
@@ -102,7 +103,7 @@ bool KeyboardTapSequencer::next_report(
         break;
     }
 
-    if (queue_count_ == 0) {
+    if (queue_count_ == 0 || !start_next_tap) {
         return false;
     }
     BootKeyboardOutputReport const &next = queue_[queue_head_];
@@ -132,6 +133,10 @@ bool KeyboardTapSequencer::idle() const {
     return stage_ == Stage::Idle && queue_count_ == 0;
 }
 
+bool KeyboardTapSequencer::tap_active() const {
+    return stage_ != Stage::Idle;
+}
+
 std::size_t KeyboardTapSequencer::queued() const {
     return queue_count_;
 }
@@ -148,6 +153,57 @@ bool KeyboardTapSequencer::propose(
     proposed_ = stage;
     out = report;
     return true;
+}
+
+void BridgeKeyboardShortcuts::enqueue_mute(BootKeyboardOutputReport const &report, bool hold) {
+    mute_.enqueue(report, hold);
+}
+
+void BridgeKeyboardShortcuts::enqueue_touch(BootKeyboardOutputReport const &report) {
+    // Keep the older waiting gestures, as in the 1.7.1 custom firmware.
+    if (touch_.queued() < kKeyboardTapQueueDepth) {
+        touch_.enqueue(report);
+    }
+}
+
+void BridgeKeyboardShortcuts::release_mute() {
+    mute_.release();
+}
+
+void BridgeKeyboardShortcuts::cancel_mute() {
+    mute_.cancel();
+}
+
+void BridgeKeyboardShortcuts::cancel_touch() {
+    touch_.cancel();
+}
+
+bool BridgeKeyboardShortcuts::mute_idle() const {
+    return mute_.idle();
+}
+
+bool BridgeKeyboardShortcuts::idle() const {
+    return mute_.idle() && touch_.idle();
+}
+
+bool BridgeKeyboardShortcuts::next_report(
+    uint32_t now_us,
+    bool delivered,
+    BootKeyboardOutputReport &report
+) {
+    touch_selected_ = touch_.tap_active() || mute_.idle();
+    if (touch_selected_) {
+        return touch_.next_report(now_us, delivered, report, mute_.idle());
+    }
+    return mute_.next_report(now_us, delivered, report);
+}
+
+void BridgeKeyboardShortcuts::accept_report(uint32_t now_us) {
+    if (touch_selected_) {
+        touch_.accept_report(now_us);
+    } else {
+        mute_.accept_report(now_us);
+    }
 }
 
 } // namespace ds5

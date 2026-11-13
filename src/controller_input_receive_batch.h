@@ -12,7 +12,9 @@ namespace ds5 {
 
 struct ReceivedControllerInputPacket {
     uint32_t generation = 0;
+    uint32_t received_at_us = 0;
     uint8_t report[kDualSenseUsbInputReportSize]{};
+    bool follows_touch_discontinuity = false;
 };
 
 // Owns only the reports of one Bluetooth receive pass, not a history of
@@ -24,12 +26,18 @@ class ControllerInputReceiveBatch {
     static_assert(Capacity > 0);
 
 public:
-    [[nodiscard]] bool push(uint8_t const *report) {
+    [[nodiscard]] bool push(
+        uint8_t const *report,
+        uint32_t received_at_us = 0,
+        bool follows_touch_discontinuity = false
+    ) {
         if (size_ == Capacity || report == nullptr) {
             return false;
         }
         auto &entry = entries_[(head_ + size_) % Capacity];
         entry.generation = generation_;
+        entry.received_at_us = received_at_us;
+        entry.follows_touch_discontinuity = follows_touch_discontinuity;
         std::memcpy(entry.report, report, sizeof(entry.report));
         ++size_;
         return true;

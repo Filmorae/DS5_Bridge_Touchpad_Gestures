@@ -46,6 +46,9 @@ void companion_loop();
 // Runs a queued Wake-on-LAN command from the top-level main loop.
 void companion_wake_command_poll();
 void companion_process_controller_report(uint8_t *report, uint16_t len);
+enum class CustomTouchAction : uint8_t;
+void companion_queue_touch_shortcut(CustomTouchAction action);
+void companion_cancel_touch_shortcuts();
 void companion_update_controller_report(uint8_t const *report, uint16_t len);
 void companion_note_host_output_report(uint8_t const *report, uint16_t len);
 #if DS5_TRIGGER_TRACE_ENABLED

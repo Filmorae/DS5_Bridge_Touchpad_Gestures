@@ -523,7 +523,7 @@ relocate_objects_to_ram(
 )
 if(ENABLE_COMPANION)
     relocate_objects_to_ram(
-            "src/companion.cpp.o@src/keyboard_tap_sequencer.cpp.o@src/host_bridge.cpp.o"
+            "src/companion.cpp.o@src/custom_touch_gesture.cpp.o@src/keyboard_tap_sequencer.cpp.o@src/host_bridge.cpp.o"
             "Relocating the companion runtime objects to SRAM"
     )
 endif()
@@ -595,6 +595,7 @@ option(ENABLE_COMPANION "Enable the optional companion HID interface" OFF)
 if(ENABLE_COMPANION)
     target_sources(ds5-bridge PRIVATE
             src/companion.cpp
+            src/custom_touch_gesture.cpp
             src/bootloader_maintenance.cpp
             src/bootloader_authorization_flash.cpp
             src/keyboard_tap_sequencer.cpp

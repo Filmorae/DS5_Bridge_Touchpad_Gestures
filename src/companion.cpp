@@ -11,6 +11,7 @@
 #include "bt.h"
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
+#include "custom_touch_gesture.h"
 #include "dualsense_output.h"
 #include "dualsense_battery_status.h"
 #include "firmware_log.h"
@@ -370,9 +371,7 @@ uint8_t shortcut_event_queue[kShortcutEventQueueDepth]{};
 uint8_t shortcut_event_head = 0;
 uint8_t shortcut_event_tail = 0;
 uint8_t shortcut_event_count = 0;
-// Types the mute-button shortcut the way a person does, one stage per USB
-// report: modifiers, then the key, then modifiers, then nothing.
-ds5::KeyboardTapSequencer mute_keyboard_taps;
+ds5::BridgeKeyboardShortcuts keyboard_shortcuts;
 bool mute_keyboard_chord_pending = false;
 uint32_t mute_keyboard_chord_until_us = 0;
 bool mute_led_flash_pending = false;
@@ -892,7 +891,7 @@ void restore_defaults() {
     clear_dynamic_chord_bindings();
     bt_set_edge_profile_switching_blocked(false);
     clear_shortcut_events();
-    mute_keyboard_taps.cancel();
+    keyboard_shortcuts.cancel_mute();
     mute_keyboard_chord_pending = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
@@ -1014,7 +1013,7 @@ void set_mute_button_action(uint8_t mode, uint8_t usage, uint8_t modifiers) {
     mute_keyboard_modifiers = modifiers;
     mute_button_last_pressed = false;
     // A changed shortcut must not keep a key of the old one held.
-    mute_keyboard_taps.cancel();
+    keyboard_shortcuts.cancel_mute();
     mute_keyboard_chord_pending = false;
     mute_led_flash_pending = false;
 
@@ -1046,7 +1045,7 @@ void queue_mute_keyboard_press(bool hold) {
     ds5::BootKeyboardOutputReport report{};
     report.bytes[0] = mute_keyboard_modifiers & kMuteKeyboardModifierMask;
     report.bytes[ds5::kBootKeyboardUsageOffset] = mute_keyboard_usage;
-    mute_keyboard_taps.enqueue(report, hold);
+    keyboard_shortcuts.enqueue_mute(report, hold);
     if (!hold) {
         mute_led_flash_pending = true;
         mute_led_flash_until_us = time_us_32() + kMuteLedFlashDurationUs;
@@ -1055,11 +1054,11 @@ void queue_mute_keyboard_press(bool hold) {
 }
 
 void queue_mute_keyboard_release() {
-    if (mute_keyboard_taps.idle()) {
+    if (keyboard_shortcuts.mute_idle()) {
         return;
     }
     // A Hold press released before the PC saw it still arrives as a full tap.
-    mute_keyboard_taps.release();
+    keyboard_shortcuts.release_mute();
     mute_led_flash_pending = false;
     refresh_mute_led_policy();
 }
@@ -1650,7 +1649,7 @@ void reset_adaptive_trigger_test() {
     restore_cached_game_trigger_effect_or_reset();
 }
 
-void mute_keyboard_loop() {
+void keyboard_shortcut_loop() {
     const uint32_t now = time_us_32();
 
     if (mute_led_flash_pending && static_cast<int32_t>(now - mute_led_flash_until_us) >= 0) {
@@ -1658,13 +1657,17 @@ void mute_keyboard_loop() {
         refresh_mute_led_policy();
     }
 
-    if (mute_keyboard_taps.idle()) {
+    if (keyboard_shortcuts.idle()) {
         return;
     }
     // The mute button lives on the controller; losing it must not leave a
     // Hold key down on the PC.
-    if (!bt_is_controller_connected()) {
-        mute_keyboard_taps.cancel();
+    const bool connected = bt_is_controller_connected();
+    if (!connected) {
+        keyboard_shortcuts.cancel_mute();
+    }
+    if (!connected || !tud_ready()) {
+        keyboard_shortcuts.cancel_touch();
     }
 
     // The keyboard endpoint is ready again once the host has taken the last
@@ -1674,11 +1677,11 @@ void mute_keyboard_loop() {
     const uint8_t keyboard_hid_instance = host_persona_keyboard_hid_instance();
     const bool ready = keyboard_hid_instance < CFG_TUD_HID && tud_hid_n_ready(keyboard_hid_instance);
     ds5::BootKeyboardOutputReport report{};
-    if (!mute_keyboard_taps.next_report(now, ready, report) || !ready) {
+    if (!keyboard_shortcuts.next_report(now, ready, report) || !ready) {
         return;
     }
     if (tud_hid_n_report(keyboard_hid_instance, 0, report.bytes.data(), report.bytes.size())) {
-        mute_keyboard_taps.accept_report(now);
+        keyboard_shortcuts.accept_report(now);
     }
 }
 
@@ -3363,6 +3366,27 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
 
 } // namespace
 
+void companion_queue_touch_shortcut(CustomTouchAction action) {
+    ds5::BootKeyboardOutputReport report{};
+    report.bytes[0] = KEYBOARD_MODIFIER_LEFTALT;
+    switch (action) {
+        case CustomTouchAction::Screenshot:
+            report.bytes[0] |= KEYBOARD_MODIFIER_LEFTGUI;
+            report.bytes[ds5::kBootKeyboardUsageOffset] = HID_KEY_PRINT_SCREEN;
+            break;
+        case CustomTouchAction::RecordToggle:
+            report.bytes[ds5::kBootKeyboardUsageOffset] = HID_KEY_F2;
+            break;
+        case CustomTouchAction::None:
+            return;
+    }
+    keyboard_shortcuts.enqueue_touch(report);
+}
+
+void companion_cancel_touch_shortcuts() {
+    keyboard_shortcuts.cancel_touch();
+}
+
 void companion_init() {
     critical_section_init(&companion_report_cs);
     ds5::bootloader_maintenance::initialize(bootloader_maintenance_context());
@@ -3423,7 +3447,7 @@ void companion_loop() {
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_chord_window_loop();
-    mute_keyboard_loop();
+    keyboard_shortcut_loop();
     adaptive_trigger_test_loop();
     apply_persistent_trigger_effect();
 }

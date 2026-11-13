@@ -60,15 +60,17 @@ void test_batch_storage_and_bounds() {
     Report report{};
     report.fill(0xa5);
     CHECK(!batch.push(nullptr) && batch.empty());
-    CHECK(batch.push(report.data()));
+    CHECK(batch.push(report.data(), 1000));
     report.fill(0x42);  // BTstack reuses its buffer straight after the callback.
-    CHECK(batch.push(report.data()));
+    CHECK(batch.push(report.data(), 2000, true));
     report.fill(0xff);
     CHECK(!batch.push(report.data()) && batch.size() == 2);
 
     Packet packet;
     CHECK(batch.pop_front(packet) && packet.report[0] == 0xa5 && packet.report[62] == 0xa5);
+    CHECK(packet.received_at_us == 1000 && !packet.follows_touch_discontinuity);
     CHECK(batch.pop_front(packet) && packet.report[0] == 0x42);
+    CHECK(packet.received_at_us == 2000 && packet.follows_touch_discontinuity);
     CHECK(!batch.pop_front(packet) && batch.empty());
 }
 

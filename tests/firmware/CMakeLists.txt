@@ -27,6 +27,13 @@ target_include_directories(firmware_logic_tests PRIVATE
     ../../src
 )
 
+add_executable(custom_touch_gesture_test
+    custom_touch_gesture_test.cpp
+    ../../src/custom_touch_gesture.cpp
+    ../../src/dualsense_input_decoder.cpp
+)
+target_include_directories(custom_touch_gesture_test PRIVATE ../../src)
+
 add_executable(usb_descriptor_migration_test
     usb_descriptor_migration_test.cpp
 )
@@ -110,6 +117,7 @@ endif()
 
 enable_testing()
 add_test(NAME firmware_logic_tests COMMAND firmware_logic_tests)
+add_test(NAME custom_touch_gesture_test COMMAND custom_touch_gesture_test)
 add_test(NAME usb_descriptor_migration_test COMMAND usb_descriptor_migration_test)
 add_test(NAME diagnostics_config_test COMMAND diagnostics_config_test)
 add_test(NAME ram_mem_test COMMAND ram_mem_test)

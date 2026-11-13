@@ -54,11 +54,13 @@ public:
     [[nodiscard]] bool next_report(
         uint32_t now_us,
         bool delivered,
-        BootKeyboardOutputReport &report
+        BootKeyboardOutputReport &report,
+        bool start_next_tap = true
     );
     void accept_report(uint32_t now_us);
 
     [[nodiscard]] bool idle() const;
+    [[nodiscard]] bool tap_active() const;
     [[nodiscard]] std::size_t queued() const;
 
 private:
@@ -89,6 +91,26 @@ private:
     bool stage_delivered_ = false;
     bool tap_held_ = false;
     bool cancel_ = false;
+};
+
+// Mute and touchpad shortcuts share one HID key state. Let the current
+// source finish its release before the other can send a report.
+class BridgeKeyboardShortcuts {
+public:
+    void enqueue_mute(BootKeyboardOutputReport const &report, bool hold);
+    void enqueue_touch(BootKeyboardOutputReport const &report);
+    void release_mute();
+    void cancel_mute();
+    void cancel_touch();
+    [[nodiscard]] bool mute_idle() const;
+    [[nodiscard]] bool idle() const;
+    [[nodiscard]] bool next_report(uint32_t now_us, bool delivered, BootKeyboardOutputReport &report);
+    void accept_report(uint32_t now_us);
+
+private:
+    KeyboardTapSequencer mute_;
+    KeyboardTapSequencer touch_;
+    bool touch_selected_ = false;
 };
 
 } // namespace ds5

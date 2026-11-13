@@ -927,14 +927,14 @@ void assert_bridge_only_wake_receiver_is_persistent_and_persona_safe(std::filesy
 
 void assert_mute_keyboard_shortcut_is_typed_in_stages(std::filesystem::path const &root) {
     const auto companion_cpp = read_text(root / "src" / "companion.cpp");
-    const std::string loop_block = extract_between(companion_cpp, "void mute_keyboard_loop() {", "\n}\n");
+    const std::string loop_block = extract_between(companion_cpp, "void keyboard_shortcut_loop() {", "\n}\n");
     if (
-        companion_cpp.find("ds5::KeyboardTapSequencer mute_keyboard_taps;") == std::string::npos
-        || companion_cpp.find("mute_keyboard_taps.enqueue(report, hold);") == std::string::npos
-        || companion_cpp.find("mute_keyboard_taps.release();") == std::string::npos
-        || loop_block.find("mute_keyboard_taps.next_report(now, ready, report)") == std::string::npos
-        || loop_block.find("mute_keyboard_taps.accept_report(now);") == std::string::npos
-        || loop_block.find("mute_keyboard_taps.cancel();") == std::string::npos
+        companion_cpp.find("ds5::BridgeKeyboardShortcuts keyboard_shortcuts;") == std::string::npos
+        || companion_cpp.find("keyboard_shortcuts.enqueue_mute(report, hold);") == std::string::npos
+        || companion_cpp.find("keyboard_shortcuts.release_mute();") == std::string::npos
+        || loop_block.find("keyboard_shortcuts.next_report(now, ready, report)") == std::string::npos
+        || loop_block.find("keyboard_shortcuts.accept_report(now);") == std::string::npos
+        || loop_block.find("keyboard_shortcuts.cancel_mute();") == std::string::npos
         || loop_block.find("keyboard_hid_instance < CFG_TUD_HID && tud_hid_n_ready(keyboard_hid_instance)")
             == std::string::npos
     ) {
@@ -1025,7 +1025,7 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
         "\n}\n\nvoid companion_process_controller_report"
     );
     const auto window_loop = loop_block.find("mute_keyboard_chord_window_loop();");
-    const auto keyboard_loop = loop_block.find("mute_keyboard_loop();");
+    const auto keyboard_loop = loop_block.find("keyboard_shortcut_loop();");
     if (
         window_loop == std::string::npos
         || keyboard_loop == std::string::npos

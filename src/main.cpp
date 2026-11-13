@@ -39,6 +39,7 @@
 #include "pico/unique_id.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
+#include "custom_touch_gesture.h"
 #endif
 
 // Pico SDK support for waiting on conditions.
@@ -326,6 +327,15 @@ using ControllerInputReceiveBatch = ds5::ControllerInputReceiveBatch<2>;
 static_assert(PICO_BTSTACK_CYW43_MAX_HCI_PROCESS_LOOP_COUNT == ControllerInputReceiveBatch::capacity(),
               "The receive handoff must hold one complete Bluetooth receive pass");
 static ControllerInputReceiveBatch controller_input_receive_batch{};
+#ifdef ENABLE_COMPANION
+static CustomTouchGestureState custom_touch_gesture{};
+static bool touch_discontinuity_pending = false;
+
+static void disarm_custom_touch_input() {
+    custom_touch_gesture_disarm(custom_touch_gesture);
+    companion_cancel_touch_shortcuts();
+}
+#endif
 // A report the USB class rejected. It goes out before anything queued.
 static bool host_input_retry_pending = false;
 static BridgeControllerState host_input_retry_state{};
@@ -454,6 +464,10 @@ static bool dualsense_feature_report_may_use_bt_passthrough(
 
 void host_input_prepare_persona_switch() {
     controller_input_receive_batch.clear();
+#ifdef ENABLE_COMPANION
+    touch_discontinuity_pending = false;
+    disarm_custom_touch_input();
+#endif
     const HostPersonaMode current_persona = host_persona_active();
     const BridgeControllerState neutral_state = neutral_controller_state();
     const uint32_t now = time_us_32();
@@ -471,6 +485,9 @@ void host_input_prepare_persona_switch() {
 }
 
 void host_input_note_usb_mounted() {
+#ifdef ENABLE_COMPANION
+    disarm_custom_touch_input();
+#endif
     critical_section_enter_blocking(&report_cs);
     host_input_have_accepted_state = false;
     critical_section_exit(&report_cs);
@@ -480,6 +497,11 @@ void host_input_note_usb_mounted() {
 
 void reset_controller_input_report_cache() {
     controller_input_receive_batch.clear();
+#ifdef ENABLE_COMPANION
+    touch_discontinuity_pending = false;
+    custom_touch_gesture_reset(custom_touch_gesture);
+    companion_cancel_touch_shortcuts();
+#endif
     BridgeControllerState default_state{};
     (void)dualsense_decode_usb_input_report(
         kNeutralDualSenseUsbInputReport,
@@ -580,7 +602,13 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     if (wake_on_lan_quiet_gate()) {
         return;
     }
-    if (data == nullptr || channel != INTERRUPT || len <= 2 || data[1] != 0x31) {
+    if (data == nullptr || channel != INTERRUPT) {
+        return;
+    }
+    if (len <= 2 || data[1] != 0x31) {
+#ifdef ENABLE_COMPANION
+        touch_discontinuity_pending = true;
+#endif
         return;
     }
 
@@ -590,13 +618,24 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     }
 
     if (len < 3 + sizeof(interrupt_in_data)) {
+#ifdef ENABLE_COMPANION
+        touch_discontinuity_pending = true;
+#endif
         return;
     }
 
     // BTstack reuses its packet buffer after this callback. Copy the report,
     // but leave chords, decoding and USB submission until the radio poll has
     // returned, so the poll ends sooner and USB is serviced between reports.
+#ifdef ENABLE_COMPANION
+    // Attach the receive time and keep any invalid-report boundary in order
+    // with valid reports staged before and after it.
+    touch_discontinuity_pending = !controller_input_receive_batch.push(
+        data + 3, time_us_32(), touch_discontinuity_pending
+    );
+#else
     (void)controller_input_receive_batch.push(data + 3);
+#endif
 }
 
 static __attribute__((noinline, noclone)) void __not_in_flash_func(process_controller_input_packet)(
@@ -619,8 +658,24 @@ static __attribute__((noinline, noclone)) void __not_in_flash_func(process_contr
 
     BridgeControllerState controller_state{};
     if (!dualsense_decode_usb_input_report(controller_report, sizeof(controller_report), controller_state)) {
+#ifdef ENABLE_COMPANION
+        disarm_custom_touch_input();
+#endif
         return;
     }
+
+#ifdef ENABLE_COMPANION
+    if (packet.follows_touch_discontinuity || host_input_waiting_for_mount
+        || !tud_ready() || usb_descriptor_bridge_only_active()) {
+        disarm_custom_touch_input();
+    }
+    const CustomTouchAction touch_action = custom_touch_gesture_apply(
+        custom_touch_gesture, controller_state, controller_report, packet.received_at_us
+    );
+    if (touch_action != CustomTouchAction::None) {
+        companion_queue_touch_shortcut(touch_action);
+    }
+#endif
 
     critical_section_enter_blocking(&report_cs);
     memcpy(interrupt_in_data, controller_report, sizeof(controller_report));
@@ -655,6 +710,12 @@ static void drain_controller_input_batch(bool service_usb) {
             tud_task();
         }
     });
+#ifdef ENABLE_COMPANION
+    if (touch_discontinuity_pending) {
+        touch_discontinuity_pending = false;
+        disarm_custom_touch_input();
+    }
+#endif
 }
 
 static void poll_bluetooth_once() {
@@ -861,6 +922,10 @@ static void service_wake_on_lan() {
         audio_handle_controller_disconnect();
         bt_quiesce_gameplay_output();
         controller_input_receive_batch.clear();
+#ifdef ENABLE_COMPANION
+        touch_discontinuity_pending = false;
+        disarm_custom_touch_input();
+#endif
         critical_section_enter_blocking(&report_cs);
         clear_host_input_delivery();
         report_dirty = false;
