@@ -6,7 +6,16 @@
 #include "controller_state.h"
 
 enum class CustomTouchAction : uint8_t { None, Screenshot, RecordToggle };
-enum class CustomTouchPhase : uint8_t { Idle, First, Pending, Latched, Rejected };
+enum class CustomTouchPhase : uint8_t {
+    Idle,
+    First,
+    Pending,
+    ScreenshotPair,
+    RepeatPair,
+    RepeatSingle,
+    Latched,
+    Rejected,
+};
 
 struct CustomTouchContact {
     uint8_t id = 0;
@@ -24,6 +33,7 @@ struct CustomTouchGestureState {
     uint32_t contact_missing_since_us = 0;
     uint32_t last_report_us = 0;
     bool contact_missing = false;
+    bool recording_eligible = false;
     bool last_click = false;
     bool suppress_held_click = false;
 };

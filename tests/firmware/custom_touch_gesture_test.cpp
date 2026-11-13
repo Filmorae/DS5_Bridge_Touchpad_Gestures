@@ -61,6 +61,118 @@ void screenshot_and_rearm() {
     assert(h.step(3180).action == CustomTouchAction::Screenshot);
 }
 
+void repeat_screenshots_follow_the_remaining_contact() {
+    Harness h;
+    h.touch(0, true, 4);
+    h.touch(1, true, 5, 900, 600);
+    h.step(0);
+    assert(h.step(150).action == CustomTouchAction::Screenshot);
+    h.touch(0, false, 99); // An inactive slot can carry an unrelated ID.
+    assert(h.step(160).action == CustomTouchAction::None);
+    h.touch(0, true, 4);
+    assert(h.step(168).action == CustomTouchAction::None); // Brief return of the original finger.
+    h.touch(0, false, 4);
+    h.step(170);
+    h.touch(0, true, 6);
+    h.touch(1, true, 5, 110, 1000);
+    assert(h.step(176).action == CustomTouchAction::Screenshot); // New ID can tap immediately.
+    assert(h.step(300).action == CustomTouchAction::None);
+    h.touch(0, true, 5, 1820, 50); // The held ID moves and swaps slots.
+    h.touch(1, false, 6);
+    h.step(310);
+    h.touch(1, true, 7);
+    assert(h.step(320).action == CustomTouchAction::Screenshot);
+
+    h.touch(0, false, 5);
+    assert(h.step(330).action == CustomTouchAction::None);
+    h.touch(0, true, 5, 50, 1050);
+    assert(h.step(340).action == CustomTouchAction::None); // Brief loss of the held ID.
+    h.touch(0, false, 5);
+    h.step(350);
+    h.step(363);
+    h.touch(0, true, 8);
+    assert(h.step(370).action == CustomTouchAction::None); // The tapping finger cannot take over.
+    assert(h.step(520).action == CustomTouchAction::None);
+    h.touch(0, false, 8);
+    h.touch(1, false, 7);
+    h.step(530);
+    h.touch(0, true, 9);
+    h.touch(1, true, 10);
+    assert(h.step(540).action == CustomTouchAction::None);
+    assert(h.step(690).action == CustomTouchAction::Screenshot);
+}
+
+void repeat_screenshot_click_passthrough_and_disarm() {
+    Harness h;
+    h.touch(0, true, 11);
+    h.touch(1, true, 12);
+    h.step(0);
+    assert(h.step(150).action == CustomTouchAction::Screenshot);
+    h.touch(1, false, 12);
+    h.step(160);
+    h.touch(1, true, 13);
+    const auto click = h.step(170, true);
+    assert(click.action == CustomTouchAction::None && !click.suppress_click);
+    assert(h.step(180).action == CustomTouchAction::None); // Click release cannot start a tap.
+    h.touch(1, false, 13);
+    h.step(190);
+    h.touch(1, true, 14);
+    assert(h.step(200).action == CustomTouchAction::Screenshot);
+    h.touch(1, false, 14);
+    h.step(210);
+    custom_touch_gesture_disarm(h.gesture);
+    h.touch(1, true, 15);
+    assert(h.step(220).action == CustomTouchAction::None);
+    assert(h.step(370).action == CustomTouchAction::None);
+}
+
+void repeat_screenshot_has_no_single_finger_timeout() {
+    Harness h;
+    h.touch(0, true, 21);
+    h.touch(1, true, 22);
+    h.step(0);
+    assert(h.step(150).action == CustomTouchAction::Screenshot);
+    h.touch(1, false, 22);
+    for (unsigned ms = 200; ms <= 5000; ms += 100) {
+        assert(h.step(ms).action == CustomTouchAction::None);
+    }
+    h.touch(1, true, 22);
+    assert(h.step(5010).action == CustomTouchAction::Screenshot);
+
+    h.touch(1, false, 22);
+    h.step(5020);
+    h.touch(1, true, 23);
+    assert(h.step(5300).action == CustomTouchAction::None); // Report stream went stale.
+}
+
+void first_screenshot_tolerance_is_independent_of_recording() {
+    Harness h;
+    h.touch(0, true, 1);
+    h.touch(1, true, 2, 900, 600);
+    h.step(0);
+    h.touch(0, true, 1, 472, 348);
+    h.touch(1, true, 2, 828, 552);
+    assert(h.step(25).action == CustomTouchAction::None);
+    assert(h.step(150).action == CustomTouchAction::Screenshot);
+
+    Harness record;
+    record.touch(0, true, 1);
+    record.touch(1, true, 2);
+    record.step(0);
+    record.touch(1, true, 2, 449, 300);
+    assert(record.step(25).action == CustomTouchAction::None);
+    record.touch(1, true, 2);
+    const auto click = record.step(30, true);
+    assert(click.action == CustomTouchAction::None && !click.suppress_click);
+
+    Harness y_limit;
+    y_limit.touch(0, true, 1);
+    y_limit.touch(1, true, 2);
+    y_limit.step(0);
+    y_limit.touch(1, true, 2, 400, 349);
+    assert(y_limit.step(150).action == CustomTouchAction::None);
+}
+
 void recording_and_click_suppression() {
     Harness h;
     h.touch(0, true, 1);
@@ -96,7 +208,7 @@ void cancel_on_motion_or_lift_or_bad_pair() {
     motion.step(0);
     motion.touch(1, true, 2);
     motion.step(30);
-    motion.touch(0, true, 1, 460, 300);
+    motion.touch(0, true, 1, 473, 300);
     assert(motion.step(40).action == CustomTouchAction::None);
     assert(motion.step(200, true).action == CustomTouchAction::None);
     assert(!motion.step(210, true).suppress_click);
@@ -266,6 +378,10 @@ void click_suppression_updates_both_report_views() {
 int main() {
     ordinary_input();
     screenshot_and_rearm();
+    repeat_screenshots_follow_the_remaining_contact();
+    repeat_screenshot_click_passthrough_and_disarm();
+    repeat_screenshot_has_no_single_finger_timeout();
+    first_screenshot_tolerance_is_independent_of_recording();
     recording_and_click_suppression();
     cancel_on_motion_or_lift_or_bad_pair();
     finger_pad_and_press_transients();

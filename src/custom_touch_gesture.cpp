@@ -17,8 +17,10 @@ constexpr uint32_t kRecentPairForClickUs = 20000;
 // before the second contact, then anchor both fingers for the decision window.
 constexpr int32_t kLandingX = 72;
 constexpr int32_t kLandingY = 48;
-constexpr int32_t kStillX = 48;
-constexpr int32_t kStillY = 32;
+constexpr int32_t kScreenshotX = 72;
+constexpr int32_t kScreenshotY = 48;
+constexpr int32_t kRecordStillX = 48;
+constexpr int32_t kRecordStillY = 32;
 constexpr int32_t kClickMotionX = 96;
 constexpr int32_t kClickMotionY = 64;
 
@@ -45,6 +47,87 @@ bool stationary(BridgeTouchPoint const &point, CustomTouchContact const &start,
         && dy >= -max_y && dy <= max_y;
 }
 
+void begin_pending(CustomTouchGestureState &gesture, uint32_t now_us) {
+    gesture.second_at_us = now_us;
+    gesture.last_valid_pair_us = now_us;
+    gesture.contact_missing = false;
+    gesture.recording_eligible = true;
+    gesture.phase = CustomTouchPhase::Pending;
+}
+
+CustomTouchAction repeat_screenshot(
+    CustomTouchGestureState &gesture,
+    BridgeControllerState const &report,
+    uint8_t count,
+    uint32_t now_us
+) {
+    const bool first_present = find_contact(report, gesture.first.id) != nullptr;
+    const bool second_present = find_contact(report, gesture.second.id) != nullptr;
+    if (gesture.phase == CustomTouchPhase::ScreenshotPair) {
+        if (count == 2 && first_present && second_present) {
+            return CustomTouchAction::None;
+        }
+        if (count != 1 || (!first_present && !second_present)) {
+            gesture.phase = CustomTouchPhase::Rejected;
+            return CustomTouchAction::None;
+        }
+        // The survivor of the first pair owns the session until it lifts.
+        if (second_present) {
+            const uint8_t departed_id = gesture.first.id;
+            gesture.first.id = gesture.second.id;
+            gesture.second.id = departed_id;
+        }
+        gesture.phase = CustomTouchPhase::RepeatSingle;
+        gesture.contact_missing_since_us = now_us;
+        return CustomTouchAction::None;
+    }
+
+    if (!first_present) {
+        if (gesture.phase != CustomTouchPhase::RepeatPair || count != 1 || !second_present) {
+            gesture.phase = CustomTouchPhase::Rejected;
+            return CustomTouchAction::None;
+        }
+        if (!gesture.contact_missing) {
+            gesture.contact_missing = true;
+            gesture.contact_missing_since_us = now_us;
+        }
+    }
+    if (gesture.contact_missing && now_us - gesture.contact_missing_since_us > kBriefContactLossUs) {
+        gesture.phase = CustomTouchPhase::Rejected;
+        return CustomTouchAction::None;
+    }
+    if (!first_present) {
+        return CustomTouchAction::None;
+    }
+    gesture.contact_missing = false;
+
+    if (count == 1) {
+        if (gesture.phase == CustomTouchPhase::RepeatPair) {
+            gesture.phase = CustomTouchPhase::RepeatSingle;
+            gesture.contact_missing_since_us = now_us;
+        }
+        return CustomTouchAction::None;
+    }
+
+    const auto &tap = report.touch_points[report.touch_points[0].contact_id == gesture.first.id ? 1 : 0];
+    if (tap.contact_id == gesture.first.id) {
+        gesture.phase = CustomTouchPhase::Rejected;
+        return CustomTouchAction::None;
+    }
+    if (gesture.phase == CustomTouchPhase::RepeatPair) {
+        if (!second_present) {
+            gesture.phase = CustomTouchPhase::Rejected;
+        }
+        return CustomTouchAction::None;
+    }
+
+    const bool brief_return = second_present
+        && now_us - gesture.contact_missing_since_us <= kBriefContactLossUs;
+    gesture.second.id = tap.contact_id;
+    gesture.phase = CustomTouchPhase::RepeatPair;
+    return brief_return || report.touchpad ? CustomTouchAction::None : CustomTouchAction::Screenshot;
+}
+
 } // namespace
 
 void custom_touch_gesture_reset(CustomTouchGestureState &gesture) {
@@ -68,7 +151,7 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
     gesture.last_click = click;
     result.suppress_click = click && gesture.suppress_held_click;
 
-    // A stalled stream cannot prove that two contacts remained static.
+    // A stalled stream cannot establish that the same fingers stayed down.
     if (gesture.phase != CustomTouchPhase::Idle
         && static_cast<uint32_t>(now_us - gesture.last_report_us) > kReportGapUs) {
         gesture.phase = count == 0 ? CustomTouchPhase::Idle : CustomTouchPhase::Rejected;
@@ -79,21 +162,25 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
         const uint32_t elapsed = now_us - gesture.second_at_us;
         auto const *first = find_contact(report, gesture.first.id);
         auto const *second = find_contact(report, gesture.second.id);
-        const bool valid = count == 2 && first && second && first != second
-            && stationary(*first, gesture.first, kStillX, kStillY)
-            && stationary(*second, gesture.second, kStillX, kStillY);
+        const bool distinct_pair = count == 2 && first && second && first != second;
+        const bool valid = distinct_pair
+            && stationary(*first, gesture.first, kScreenshotX, kScreenshotY)
+            && stationary(*second, gesture.second, kScreenshotX, kScreenshotY);
+        const bool record_pair_valid = distinct_pair && gesture.recording_eligible
+            && stationary(*first, gesture.first, kRecordStillX, kRecordStillY)
+            && stationary(*second, gesture.second, kRecordStillX, kRecordStillY);
         const bool known_contacts = count == 0
             || (count == 1 && (first || second))
-            || (count == 2 && first && second && first != second);
+            || distinct_pair;
         const bool click_motion_ok = (!first || stationary(*first, gesture.first, kClickMotionX, kClickMotionY))
             && (!second || stationary(*second, gesture.second, kClickMotionX, kClickMotionY));
 
         // The pad can briefly lose or shift a contact as it is physically
         // pressed. Use the immediately preceding valid pair for this edge.
-        if (click_edge && elapsed <= kDecisionWindowUs
+        if (gesture.recording_eligible && click_edge && elapsed <= kDecisionWindowUs
             && known_contacts && click_motion_ok
             && (!gesture.contact_missing || now_us - gesture.contact_missing_since_us <= kBriefContactLossUs)
-            && (valid || now_us - gesture.last_valid_pair_us <= kRecentPairForClickUs)) {
+            && (record_pair_valid || now_us - gesture.last_valid_pair_us <= kRecentPairForClickUs)) {
             gesture.phase = CustomTouchPhase::Latched;
             gesture.suppress_held_click = true;
             result.action = CustomTouchAction::RecordToggle;
@@ -120,9 +207,14 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
             return result;
         }
         gesture.contact_missing = false;
-        gesture.last_valid_pair_us = now_us;
+        // Extra movement may still qualify for the screenshot. Recording
+        // keeps the old limits, including the larger allowance at the click edge.
+        gesture.recording_eligible = record_pair_valid;
+        if (record_pair_valid) {
+            gesture.last_valid_pair_us = now_us;
+        }
         if (elapsed >= kDecisionWindowUs && !click) {
-            gesture.phase = CustomTouchPhase::Latched;
+            gesture.phase = CustomTouchPhase::ScreenshotPair;
             result.action = CustomTouchAction::Screenshot;
         } else if (click) {
             gesture.phase = CustomTouchPhase::Rejected;
@@ -136,6 +228,12 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
         return result;
     }
     if (gesture.phase == CustomTouchPhase::Rejected) return result;
+    if (gesture.phase == CustomTouchPhase::ScreenshotPair
+        || gesture.phase == CustomTouchPhase::RepeatPair
+        || gesture.phase == CustomTouchPhase::RepeatSingle) {
+        result.action = repeat_screenshot(gesture, report, count, now_us);
+        return result;
+    }
     if (gesture.phase == CustomTouchPhase::Latched) {
         result.suppress_click = click && gesture.suppress_held_click;
         return result;
@@ -151,10 +249,7 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
             // Both contacts first arrived in the same report.
             gesture.first = contact(report.touch_points[0]);
             gesture.second = contact(report.touch_points[1]);
-            gesture.first_at_us = gesture.second_at_us = now_us;
-            gesture.last_valid_pair_us = now_us;
-            gesture.contact_missing = false;
-            gesture.phase = CustomTouchPhase::Pending;
+            begin_pending(gesture, now_us);
             if (click_edge) {
                 gesture.phase = CustomTouchPhase::Latched;
                 gesture.suppress_held_click = true;
@@ -179,10 +274,7 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
             } else {
                 gesture.first = contact(*first);
                 gesture.second = contact(other);
-                gesture.second_at_us = now_us;
-                gesture.last_valid_pair_us = now_us;
-                gesture.contact_missing = false;
-                gesture.phase = CustomTouchPhase::Pending;
+                begin_pending(gesture, now_us);
                 if (click_edge) {
                     gesture.phase = CustomTouchPhase::Latched;
                     gesture.suppress_held_click = true;

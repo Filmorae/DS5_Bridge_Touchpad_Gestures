@@ -15,23 +15,31 @@ and cancels the screenshot. Set Alt+F2 as the recording toggle in NVIDIA App:
 its default is Photo Mode, while the default recording shortcut is Alt+F9.
 The triggering click bit alone is cleared
 from the current and subsequent controller reports until that physical press
-is released; other buttons and touch coordinates remain live. A completed or
-cancelled gesture cannot rearm until all fingers leave the pad.
+is released. Other buttons and touch coordinates remain live.
 
 The first contact may settle by up to **72 X / 48 Y raw units** before the
 second arrives. Both positions are then anchored at the start of the
 decision window. During the window, each contact may deviate at most
-**48 X / 32 Y units**; more motion cancels the shortcut. The upstream
-decoder reads two independent 12-bit XY contacts; its DS4 conversion and the
-Sony Linux driver identify DualSense travel as 1920×1080. Window tolerances
-are about 2.5% X and 3% Y. One contact may briefly disappear for up to
+**72 X / 48 Y units** for a screenshot. The upstream decoder reads two
+independent 12-bit XY contacts across a 1920×1080 touch area.
+One contact may briefly disappear for up to
 **12 ms** if the same ID returns inside the movement limits; a screenshot
 waits until both are present. A recording click can use a valid pair seen
 within the previous **20 ms** to survive contact changes caused by the
-physical press, provided the remaining contact has not moved markedly.
+physical press. Recording retains the **48 X / 32 Y** pair tolerance and the
+**96 X / 64 Y** allowance at the click edge.
 IDs are tracked independently of slot order. A report gap above 250 ms
 rejects pending recognition until the pad is empty. An unexpected or
 truncated controller report also cancels waiting gesture shortcuts.
+
+After the first screenshot, observing one original finger lift makes the
+surviving contact ID the anchor. It can move anywhere on the pad. Each new
+tapping contact triggers another screenshot as it lands. The pad must report
+the anchor alone between taps. The previous tapping ID returning within
+**12 ms** counts as a brief loss and sends nothing. An anchor missing for more
+than **12 ms** while a tapping finger remains ends the session and requires a
+clear pad. An empty pad ends the session immediately. A click on the same
+report as a tapping contact's arrival passes through and skips that shot.
 
 `src/custom_touch_gesture.{h,cpp}` holds the allocation-free recognizer.
 `src/main.cpp` stamps controller packets at Bluetooth receive time. The
