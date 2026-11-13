@@ -33,7 +33,6 @@ struct CustomTouchGestureState {
     uint32_t contact_missing_since_us = 0;
     uint32_t last_report_us = 0;
     bool contact_missing = false;
-    bool recording_eligible = false;
     bool last_click = false;
     bool suppress_held_click = false;
 };

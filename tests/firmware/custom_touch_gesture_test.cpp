@@ -145,7 +145,7 @@ void repeat_screenshot_has_no_single_finger_timeout() {
     assert(h.step(5300).action == CustomTouchAction::None); // Report stream went stale.
 }
 
-void first_screenshot_tolerance_is_independent_of_recording() {
+void screenshot_and_recording_share_pair_tolerance() {
     Harness h;
     h.touch(0, true, 1);
     h.touch(1, true, 2, 900, 600);
@@ -159,11 +159,23 @@ void first_screenshot_tolerance_is_independent_of_recording() {
     record.touch(0, true, 1);
     record.touch(1, true, 2);
     record.step(0);
-    record.touch(1, true, 2, 449, 300);
+    record.touch(0, true, 1, 472, 348);
+    record.touch(1, true, 2, 328, 252);
     assert(record.step(25).action == CustomTouchAction::None);
-    record.touch(1, true, 2);
-    const auto click = record.step(30, true);
-    assert(click.action == CustomTouchAction::None && !click.suppress_click);
+    // This is beyond the 20 ms fallback from the original landing, so the
+    // moved pair must itself qualify before and at the click.
+    const auto click = record.step(50, true);
+    assert(click.action == CustomTouchAction::RecordToggle && click.suppress_click);
+
+    Harness drift;
+    drift.touch(0, true, 1);
+    drift.touch(1, true, 2);
+    drift.step(0);
+    drift.touch(1, true, 2, 473, 300);
+    assert(drift.step(25).action == CustomTouchAction::None);
+    drift.touch(1, true, 2);
+    const auto rejected_click = drift.step(30, true);
+    assert(rejected_click.action == CustomTouchAction::None && !rejected_click.suppress_click);
 
     Harness y_limit;
     y_limit.touch(0, true, 1);
@@ -247,12 +259,22 @@ void finger_pad_and_press_transients() {
     press.step(0);
     press.touch(1, true, 31, 900, 600);
     press.step(80);
-    press.step(90);
+    press.touch(1, true, 31, 972, 648);
+    assert(press.step(110).action == CustomTouchAction::None);
     press.touch(0, false, 30);
-    press.touch(1, true, 31, 970, 600); // Press shifts or hides contacts in this report.
-    auto pressed = press.step(100, true);
+    press.touch(1, true, 31, 996, 664); // Press shifts or hides contacts in this report.
+    auto pressed = press.step(120, true);
     assert(pressed.action == CustomTouchAction::RecordToggle && pressed.suppress_click);
     assert(press.step(260, true).action == CustomTouchAction::None);
+
+    Harness excess_press;
+    excess_press.touch(0, true, 32);
+    excess_press.touch(1, true, 33);
+    excess_press.step(0);
+    excess_press.step(25);
+    excess_press.touch(1, true, 33, 497, 300);
+    const auto excess_click = excess_press.step(30, true);
+    assert(excess_click.action == CustomTouchAction::None && !excess_click.suppress_click);
 
     Harness brief_loss;
     brief_loss.touch(0, true, 40);
@@ -381,7 +403,7 @@ int main() {
     repeat_screenshots_follow_the_remaining_contact();
     repeat_screenshot_click_passthrough_and_disarm();
     repeat_screenshot_has_no_single_finger_timeout();
-    first_screenshot_tolerance_is_independent_of_recording();
+    screenshot_and_recording_share_pair_tolerance();
     recording_and_click_suppression();
     cancel_on_motion_or_lift_or_bad_pair();
     finger_pad_and_press_transients();

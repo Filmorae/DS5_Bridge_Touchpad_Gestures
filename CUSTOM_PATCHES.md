@@ -20,14 +20,13 @@ is released. Other buttons and touch coordinates remain live.
 The first contact may settle by up to **72 X / 48 Y raw units** before the
 second arrives. Both positions are then anchored at the start of the
 decision window. During the window, each contact may deviate at most
-**72 X / 48 Y units** for a screenshot. The upstream decoder reads two
+**72 X / 48 Y units** for either gesture. The upstream decoder reads two
 independent 12-bit XY contacts across a 1920×1080 touch area.
 One contact may briefly disappear for up to
 **12 ms** if the same ID returns inside the movement limits; a screenshot
 waits until both are present. A recording click can use a valid pair seen
 within the previous **20 ms** to survive contact changes caused by the
-physical press. Recording retains the **48 X / 32 Y** pair tolerance and the
-**96 X / 64 Y** allowance at the click edge.
+physical press. Recording allows up to **96 X / 64 Y** at that click edge.
 IDs are tracked independently of slot order. A report gap above 250 ms
 rejects pending recognition until the pad is empty. An unexpected or
 truncated controller report also cancels waiting gesture shortcuts.

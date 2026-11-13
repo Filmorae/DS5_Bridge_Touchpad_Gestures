@@ -17,10 +17,8 @@ constexpr uint32_t kRecentPairForClickUs = 20000;
 // before the second contact, then anchor both fingers for the decision window.
 constexpr int32_t kLandingX = 72;
 constexpr int32_t kLandingY = 48;
-constexpr int32_t kScreenshotX = 72;
-constexpr int32_t kScreenshotY = 48;
-constexpr int32_t kRecordStillX = 48;
-constexpr int32_t kRecordStillY = 32;
+constexpr int32_t kPairMotionX = 72;
+constexpr int32_t kPairMotionY = 48;
 constexpr int32_t kClickMotionX = 96;
 constexpr int32_t kClickMotionY = 64;
 
@@ -51,7 +49,6 @@ void begin_pending(CustomTouchGestureState &gesture, uint32_t now_us) {
     gesture.second_at_us = now_us;
     gesture.last_valid_pair_us = now_us;
     gesture.contact_missing = false;
-    gesture.recording_eligible = true;
     gesture.phase = CustomTouchPhase::Pending;
 }
 
@@ -164,11 +161,8 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
         auto const *second = find_contact(report, gesture.second.id);
         const bool distinct_pair = count == 2 && first && second && first != second;
         const bool valid = distinct_pair
-            && stationary(*first, gesture.first, kScreenshotX, kScreenshotY)
-            && stationary(*second, gesture.second, kScreenshotX, kScreenshotY);
-        const bool record_pair_valid = distinct_pair && gesture.recording_eligible
-            && stationary(*first, gesture.first, kRecordStillX, kRecordStillY)
-            && stationary(*second, gesture.second, kRecordStillX, kRecordStillY);
+            && stationary(*first, gesture.first, kPairMotionX, kPairMotionY)
+            && stationary(*second, gesture.second, kPairMotionX, kPairMotionY);
         const bool known_contacts = count == 0
             || (count == 1 && (first || second))
             || distinct_pair;
@@ -177,10 +171,10 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
 
         // The pad can briefly lose or shift a contact as it is physically
         // pressed. Use the immediately preceding valid pair for this edge.
-        if (gesture.recording_eligible && click_edge && elapsed <= kDecisionWindowUs
+        if (click_edge && elapsed <= kDecisionWindowUs
             && known_contacts && click_motion_ok
             && (!gesture.contact_missing || now_us - gesture.contact_missing_since_us <= kBriefContactLossUs)
-            && (record_pair_valid || now_us - gesture.last_valid_pair_us <= kRecentPairForClickUs)) {
+            && (valid || now_us - gesture.last_valid_pair_us <= kRecentPairForClickUs)) {
             gesture.phase = CustomTouchPhase::Latched;
             gesture.suppress_held_click = true;
             result.action = CustomTouchAction::RecordToggle;
@@ -207,12 +201,7 @@ CustomTouchResult __not_in_flash_func(custom_touch_gesture_process)(
             return result;
         }
         gesture.contact_missing = false;
-        // Extra movement may still qualify for the screenshot. Recording
-        // keeps the old limits, including the larger allowance at the click edge.
-        gesture.recording_eligible = record_pair_valid;
-        if (record_pair_valid) {
-            gesture.last_valid_pair_us = now_us;
-        }
+        gesture.last_valid_pair_us = now_us;
         if (elapsed >= kDecisionWindowUs && !click) {
             gesture.phase = CustomTouchPhase::ScreenshotPair;
             result.action = CustomTouchAction::Screenshot;
